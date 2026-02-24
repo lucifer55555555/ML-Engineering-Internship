@@ -1,0 +1,4 @@
+# Configuration for MLOps batch processing
+seed: 42
+window: 5
+version: "v1"

@@ -1,0 +1,261 @@
+#!/usr/bin/env python3
+"""
+MLOps Technical Assessment - Batch Processing Job
+Computes rolling mean signals from OHLCV data with full observability.
+"""
+
+import argparse
+import logging
+import sys
+import time
+from pathlib import Path
+from typing import Dict, Any, Optional
+import json
+import yaml
+import numpy as np
+import pandas as pd
+from datetime import datetime
+
+class MLOpsBatchJob:
+    """Main batch processing class for MLOps pipeline."""
+    
+    def __init__(self, input_path: str, config_path: str, 
+                 output_path: str, log_path: str):
+        self.input_path = Path(input_path)
+        self.config_path = Path(config_path)
+        self.output_path = Path(output_path)
+        self.log_path = Path(log_path)
+        self.config: Dict[str, Any] = {}
+        self.data: Optional[pd.DataFrame] = None
+        self.metrics: Dict[str, Any] = {}
+        self.start_time: Optional[float] = None
+        
+        # Setup logging
+        self._setup_logging()
+        
+    def _setup_logging(self):
+        """Configure logging to file and console."""
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(self.log_path),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+    
+    def load_config(self) -> bool:
+        """Load and validate configuration from YAML file."""
+        try:
+            if not self.config_path.exists():
+                raise FileNotFoundError(f"Config file not found: {self.config_path}")
+            
+            with open(self.config_path, 'r') as f:
+                self.config = yaml.safe_load(f)
+            
+            # Validate required fields
+            required_fields = ['seed', 'window', 'version']
+            missing_fields = [field for field in required_fields 
+                            if field not in self.config]
+            
+            if missing_fields:
+                raise ValueError(f"Missing required config fields: {missing_fields}")
+            
+            # Validate field types
+            if not isinstance(self.config['seed'], int):
+                raise ValueError("Config 'seed' must be an integer")
+            if not isinstance(self.config['window'], int) or self.config['window'] < 1:
+                raise ValueError("Config 'window' must be a positive integer")
+            if not isinstance(self.config['version'], str):
+                raise ValueError("Config 'version' must be a string")
+            
+            # Set random seed for reproducibility
+            np.random.seed(self.config['seed'])
+            
+            self.logger.info(f"Config loaded successfully: seed={self.config['seed']}, "
+                           f"window={self.config['window']}, version={self.config['version']}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Config loading failed: {str(e)}")
+            self.write_error_output(str(e))
+            return False
+    
+    def load_data(self) -> bool:
+        """Load and validate input data."""
+        try:
+            if not self.input_path.exists():
+                raise FileNotFoundError(f"Input file not found: {self.input_path}")
+            
+            # Check if file is empty
+            if self.input_path.stat().st_size == 0:
+                raise ValueError("Input file is empty")
+            
+            # Try to read CSV
+            try:
+                self.data = pd.read_csv(self.input_path)
+            except Exception as e:
+                raise ValueError(f"Invalid CSV format: {str(e)}")
+            
+            # Check if data is empty
+            if len(self.data) == 0:
+                raise ValueError("Dataset has no rows")
+            
+            # Validate required column exists
+            if 'close' not in self.data.columns:
+                raise ValueError("Required column 'close' not found in dataset")
+            
+            # Check for NaN values in close column
+            if self.data['close'].isna().any():
+                self.logger.warning("Found NaN values in 'close' column, dropping them")
+                self.data = self.data.dropna(subset=['close'])
+            
+            self.logger.info(f"Data loaded successfully: {len(self.data)} rows")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Data loading failed: {str(e)}")
+            self.write_error_output(str(e))
+            return False
+    
+    def compute_rolling_mean(self) -> pd.Series:
+        """Compute rolling mean on close price."""
+        window = self.config['window']
+        self.logger.info(f"Computing {window}-period rolling mean")
+        
+        # Compute rolling mean, resulting in NaN for first window-1 rows
+        rolling_mean = self.data['close'].rolling(window=window, min_periods=1).mean()
+        
+        self.logger.info(f"Rolling mean computed, shape: {rolling_mean.shape}")
+        return rolling_mean
+    
+    def generate_signals(self, rolling_mean: pd.Series) -> pd.Series:
+        """Generate binary signals based on close vs rolling mean."""
+        self.logger.info("Generating trading signals")
+        
+        # Compare close price with rolling mean
+        # For first window-1 rows, rolling_mean equals close (min_periods=1)
+        # So signal will be 0 (close not > rolling_mean)
+        signals = (self.data['close'] > rolling_mean).astype(int)
+        
+        # Log signal distribution
+        signal_counts = signals.value_counts()
+        self.logger.info(f"Signal distribution: 0: {signal_counts.get(0, 0)}, "
+                        f"1: {signal_counts.get(1, 0)}")
+        
+        return signals
+    
+    def compute_metrics(self, signals: pd.Series, execution_time: float):
+        """Compute and store metrics."""
+        self.metrics = {
+            'version': self.config['version'],
+            'rows_processed': len(self.data),
+            'metric': 'signal_rate',
+            'value': float(signals.mean()),
+            'latency_ms': round(execution_time * 1000, 2),
+            'seed': self.config['seed'],
+            'status': 'success'
+        }
+        
+        self.logger.info(f"Metrics computed: rows={self.metrics['rows_processed']}, "
+                        f"signal_rate={self.metrics['value']:.4f}, "
+                        f"latency_ms={self.metrics['latency_ms']}")
+    
+    def write_output(self):
+        """Write metrics to output file."""
+        try:
+            with open(self.output_path, 'w') as f:
+                json.dump(self.metrics, f, indent=2)
+            self.logger.info(f"Metrics written to {self.output_path}")
+            
+            # Also print to stdout
+            print("\nFinal Metrics:")
+            print(json.dumps(self.metrics, indent=2))
+            
+        except Exception as e:
+            self.logger.error(f"Failed to write output file: {str(e)}")
+            raise
+    
+    def write_error_output(self, error_message: str):
+        """Write error output file."""
+        error_metrics = {
+            'version': self.config.get('version', 'unknown'),
+            'status': 'error',
+            'error_message': error_message
+        }
+        
+        try:
+            with open(self.output_path, 'w') as f:
+                json.dump(error_metrics, f, indent=2)
+            
+            # Also print to stdout
+            print("\nError Metrics:")
+            print(json.dumps(error_metrics, indent=2))
+            
+        except Exception as e:
+            self.logger.error(f"Failed to write error output: {str(e)}")
+    
+    def run(self) -> int:
+        """Execute the batch processing job."""
+        self.start_time = time.time()
+        self.logger.info("=" * 50)
+        self.logger.info(f"MLOps Batch Job Started at {datetime.now().isoformat()}")
+        self.logger.info("=" * 50)
+        
+        # Step 1: Load config
+        if not self.load_config():
+            return 1
+        
+        # Step 2: Load data
+        if not self.load_data():
+            return 1
+        
+        try:
+            # Step 3: Compute rolling mean
+            rolling_mean = self.compute_rolling_mean()
+            
+            # Step 4: Generate signals
+            signals = self.generate_signals(rolling_mean)
+            
+            # Step 5: Compute metrics
+            execution_time = time.time() - self.start_time
+            self.compute_metrics(signals, execution_time)
+            
+            # Step 6: Write output
+            self.write_output()
+            
+            self.logger.info("=" * 50)
+            self.logger.info(f"Job completed successfully at {datetime.now().isoformat()}")
+            self.logger.info("=" * 50)
+            
+            return 0
+            
+        except Exception as e:
+            self.logger.error(f"Job failed: {str(e)}")
+            self.write_error_output(str(e))
+            return 1
+
+
+def main():
+    """Main entry point with argument parsing."""
+    parser = argparse.ArgumentParser(description='MLOps Batch Processing Job')
+    parser.add_argument('--input', required=True, help='Path to input CSV file')
+    parser.add_argument('--config', required=True, help='Path to config YAML file')
+    parser.add_argument('--output', required=True, help='Path to output metrics JSON')
+    parser.add_argument('--log-file', required=True, help='Path to log file')
+    
+    args = parser.parse_args()
+    
+    job = MLOpsBatchJob(
+        input_path=args.input,
+        config_path=args.config,
+        output_path=args.output,
+        log_path=args.log_file
+    )
+    
+    sys.exit(job.run())
+
+
+if __name__ == '__main__':
+    main()

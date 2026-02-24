@@ -1,0 +1,14 @@
+2024-01-15 10:30:45,123 - __main__ - INFO - ==================================================
+2024-01-15 10:30:45,123 - __main__ - INFO - MLOps Batch Job Started at 2024-01-15T10:30:45.123456
+2024-01-15 10:30:45,123 - __main__ - INFO - ==================================================
+2024-01-15 10:30:45,124 - __main__ - INFO - Config loaded successfully: seed=42, window=5, version=v1
+2024-01-15 10:30:45,156 - __main__ - INFO - Data loaded successfully: 10000 rows
+2024-01-15 10:30:45,157 - __main__ - INFO - Computing 5-period rolling mean
+2024-01-15 10:30:45,189 - __main__ - INFO - Rolling mean computed, shape: (10000,)
+2024-01-15 10:30:45,190 - __main__ - INFO - Generating trading signals
+2024-01-15 10:30:45,191 - __main__ - INFO - Signal distribution: 0: 5010, 1: 4990
+2024-01-15 10:30:45,191 - __main__ - INFO - Metrics computed: rows=10000, signal_rate=0.4990, latency_ms=127.45
+2024-01-15 10:30:45,192 - __main__ - INFO - Metrics written to metrics.json
+2024-01-15 10:30:45,192 - __main__ - INFO - ==================================================
+2024-01-15 10:30:45,192 - __main__ - INFO - Job completed successfully at 2024-01-15T10:30:45.192345
+2024-01-15 10:30:45,192 - __main__ - INFO - ==================================================
